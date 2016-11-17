@@ -142,8 +142,20 @@ bool NonBlockingBST :: add (int k)
 		if (result == FOUND) return false;
 		newNode = reinterpret_cast<long>(new Node(k));
 		bool isLeft = (result == NOTFOUND_L);
-		long old = isleft ? reinterpret_cast<Node*>(curr)->left : reinterpret_cast<Node*>(curr)->right;
+		long old = isLeft ? reinterpret_cast<Node*>(curr)->left : reinterpret_cast<Node*>(curr)->right;
+		casOp = reinterpret_cast<long>(new ChildCASOp(isLeft, old, newNode));
+		if (reinterpret_cast<Node*>(curr)->op.compare_exchange_strong(currOp, FLAG(casOp, CHILDCAS))) {
+			helpChildCAS(casOp, curr);
+			return true;
+		}
 	}
+}
+
+void NonBlockingBST :: helpChildCAS(long op, long dest) {
+	Node* dest_p     = reinterpret_cast<Node*>(dest);
+	ChildCASOp *op_p = reinterpret_cast<ChildCASOp*>(op);
+	
+	(op_p->isLeft?dest_p->left:dest_p->right).compare_exchange_strong(op_p->expected, op_p->update);
 }
 
 int main()
