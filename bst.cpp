@@ -10,7 +10,7 @@
 
 /* Macros to modify state of a node */
 
-#define FLAG(ptr, state) ((ptr) |= (state))  /* Set the passed flag */
+#define FLAG(ptr, state) ((((ptr)>>2)<<2)|(state))   /* Set the passed flag */
 #define GETFLAG(ptr)     ((ptr) & 3)         /* Get current status */
 #define UNFLAG(ptr)      ((ptr) &= ~0<<2)    /* Clear all the flags  */
 
@@ -92,6 +92,7 @@ int NonBlockingBST :: find(int k, long& pred, long& predOp,
 	curr = auxRoot;
 	currOp = reinterpret_cast<Node*>(curr)->op;
 	if (GETFLAG(currOp) != NONE) {
+		//cout << "ABORT Alert\n";
 		if (auxRoot == reinterpret_cast<long>(&root)) {
 			helpChildCAS(UNFLAG(currOp), curr);
 			goto retry;
@@ -102,15 +103,18 @@ int NonBlockingBST :: find(int k, long& pred, long& predOp,
 	lastRight = curr;
 	lastRightOp = currOp;
 	while (!ISNULL(next)) {
+		//cout << "Check 1" << endl;
 		pred = curr;
 		predOp = currOp;
 		curr = next;
 		currOp = reinterpret_cast<Node*>(curr)->op;
 		if (GETFLAG(currOp) != NONE) {
+			//cout << "Never come here\n";
 			help(pred, predOp, curr, currOp);
 			goto retry;
 		}
 		currKey = reinterpret_cast<Node*>(curr)->key;
+		//cout << currKey << endl;
 		if (k < currKey) {
 			result = NOTFOUND_L;
 			next = reinterpret_cast<Node*>(curr)->left;
@@ -139,26 +143,65 @@ bool NonBlockingBST :: add (int k)
 	int result;
 	while(true) {
 		result = find(k, pred, predOp, curr, currOp, reinterpret_cast<long>(&root));
+		//cout << "Node being added to " << reinterpret_cast<Node*>(curr)->key << endl;
 		if (result == FOUND) return false;
 		newNode = reinterpret_cast<long>(new Node(k));
 		bool isLeft = (result == NOTFOUND_L);
+		//cout << "Left Node? " << isLeft << endl;
 		long old = isLeft ? reinterpret_cast<Node*>(curr)->left : reinterpret_cast<Node*>(curr)->right;
+		//cout << "old: " << old << endl;
 		casOp = reinterpret_cast<long>(new ChildCASOp(isLeft, old, newNode));
+		//cout << "casOp: " << casOp << endl;
+		//cout << "newNode: " << newNode << endl;
 		if (reinterpret_cast<Node*>(curr)->op.compare_exchange_strong(currOp, FLAG(casOp, CHILDCAS))) {
 			helpChildCAS(casOp, curr);
+			////cout << ISNULL(reinterpret_cast<Node*>(curr)->right) << endl;
+			//cout << "Right Node address: " << reinterpret_cast<Node*>(curr)->right << endl;
 			return true;
 		}
 	}
 }
 
 void NonBlockingBST :: helpChildCAS(long op, long dest) {
+	//cout << "op: " << op << endl;
 	Node* dest_p     = reinterpret_cast<Node*>(dest);
 	ChildCASOp *op_p = reinterpret_cast<ChildCASOp*>(op);
 	
+	//cout << "Status before CAS in helpChildCAS:\n";
+	//cout << "Is left? " << op_p -> isLeft << endl;
+	//cout << "dest_p->right : " << dest_p->right << endl;
+	//cout << "op_p->expected : " << op_p->expected << endl;
+	//cout << "op_p->update : " << op_p->update << endl;
 	(op_p->isLeft?dest_p->left:dest_p->right).compare_exchange_strong(op_p->expected, op_p->update);
+	//cout << "Dest right: " << dest_p->right << endl;
+	long tmp = FLAG(op, CHILDCAS);
+	dest_p->op.compare_exchange_strong(tmp, FLAG(op, NONE));
+}
+
+void NonBlockingBST :: help(long pred, long predOp, long curr, long currOp)
+{
 }
 
 int main()
 {
+	NonBlockingBST B;
+	while(1) {
+		cout << "1:I, 2:S, 3:D, 4:E\n";
+		int ch, val;cin>>ch>>val;
+		cout << "Status: ";
+		switch(ch) {
+			case 1:
+				cout << B.add(val);
+				break;
+			case 2:
+				cout << B.contains(val);
+				break;
+			case 3:
+			case 4:
+			default:
+				return 0;
+		}
+		cout << endl;
+	}
 	return 0;
 }
