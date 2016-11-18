@@ -10,14 +10,14 @@
 
 /* Macros to modify state of a node */
 
-#define FLAG(ptr, state) ((((ptr)>>2)<<2)|(state))   /* Set the passed flag */
-#define GETFLAG(ptr)     ((ptr) & 3)                 /* Get current status */
-#define UNFLAG(ptr)      ((ptr) & ~0<<2)            /* Clear all the flags  */
+#define FLAG(ptr, state) (reinterpret_cast<Operation*>(((reinterpret_cast<long>((ptr))>>2)<<2)|(state)))   /* Set the passed flag */
+#define GETFLAG(ptr)     (reinterpret_cast<long>((ptr)) & 3)                                               /* Get current status */
+#define UNFLAG(ptr)      (reinterpret_cast<Operation*>(reinterpret_cast<long>((ptr)) & ~0<<2))             /* Clear all the flags  */
 
 /* Manipulate node pointers */
 
-#define SETNULL(ptr)      ((ptr) |  1)       /* Set the null bit */
-#define ISNULL(ptr)       ((ptr) &  1)       /* Check if null */
+#define SETNULL(ptr)      (reinterpret_cast<Node*>(reinterpret_cast<long>((ptr)) |  1))       /* Set the null bit */
+#define ISNULL(ptr)       (reinterpret_cast<long>((ptr)) &  1)                                /* Check if null */
 
 /* Possible states of a relocation operation */
 enum relocation {ONGOING, SUCCESSFUL, FAILED};
@@ -29,34 +29,35 @@ class Operation {};
 class Node { 
 	public:
 		atomic<int> key;
-		atomic<long> op;
-		atomic<long> left;
-		atomic<long> right;
+		atomic<Operation*> op;
+		atomic<Node*> left;
+		atomic<Node*> right;
 
 		Node(int k) : 
-			key(k), op(0), left(1), right(1) {}
+			key(k), op(0), left(reinterpret_cast<Node*>(1)), 
+			right(reinterpret_cast<Node*>(1)) {}
 	         
 };
 
 class ChildCASOp : public Operation {
 	public:
 		bool isLeft;
-		long expected;
-		long update;
+		Node* expected;
+		Node* update;
 	
-		ChildCASOp(bool f, long old, long newNode) :
+		ChildCASOp(bool f, Node* old, Node* newNode) :
 			isLeft(f), expected(old), update(newNode) {}
 };
 
 class RelocateOp : public Operation {
 	public:
 		atomic<int> state;
-		long dest;
-		long destOp;
+		Node* dest;
+		Operation* destOp;
 		int removeKey;
 		int replaceKey;
 
-		RelocateOp (long d, long dop, int rm_key, int rep_key) :
+		RelocateOp (Node* d, Operation* dop, int rm_key, int rep_key) :
 			state(ONGOING), dest(d), destOp(dop), removeKey(rm_key), replaceKey(rep_key) {}
 };
 
@@ -70,61 +71,61 @@ class NonBlockingBST {
 
 		NonBlockingBST() : root(-1) {}
 		bool contains (int k);
-		int find(int k, long& pred, long& predOp, long& curr,
-				long& currOp, long auxRoot);
+		int find(int k, Node*& pred, Operation*& predOp, Node*& curr,
+				Operation*& currOp, Node* auxRoot);
 		bool add(int k);
-		void helpChildCAS(long op, long dest);
+		void helpChildCAS(Operation* op, Node* dest);
 		bool remove(int k);
-		bool helpRelocate(long op, long pred, long predOp, long curr);
-		void helpMarked(long pred, long predOp, long curr);
-		void help(long pred, long predOp, long curr, long currOp);
+		bool helpRelocate(Operation* op, Node* pred, Operation* predOp, Node* curr);
+		void helpMarked(Node* pred, Operation* predOp, Node* curr);
+		void help(Node* pred, Operation* predOp, Node* curr, Operation* currOp);
 };
 
 bool NonBlockingBST :: contains(int k)
 {
-	long pred, curr;
-	long predOp, currOp;
-	return find(k, pred, predOp, curr, currOp, reinterpret_cast<long>(&root)) == FOUND;
+	Node *pred, *curr;
+	Operation *predOp, *currOp;
+	return find(k, pred, predOp, curr, currOp, &root) == FOUND;
 }
 
-int NonBlockingBST :: find(int k, long& pred, long& predOp,
-	                   long& curr, long& currOp, long auxRoot)
+int NonBlockingBST :: find(int k, Node*& pred, Operation*& predOp,
+	                   Node*& curr, Operation*& currOp, Node* auxRoot)
 {
 	int result, currKey;
-	long next, lastRight;
-	long lastRightOp;
+	Node *next, *lastRight;
+	Operation* lastRightOp;
 
     retry:
 	result = NOTFOUND_R;
 	curr = auxRoot;
-	currOp = reinterpret_cast<Node*>(curr)->op;
+	currOp = curr->op;
 	if (GETFLAG(currOp) != NONE) {
-		if (auxRoot == reinterpret_cast<long>(&root)) {
+		if (auxRoot == &root) {
 			helpChildCAS(UNFLAG(currOp), curr);
 			goto retry;
 		} 
 		else return ABORT;
 	}
-	next = reinterpret_cast<Node*>(curr)->right;
+	next = curr->right;
 	lastRight = curr;
 	lastRightOp = currOp;
 	while (!ISNULL(next)) {
 		pred = curr;
 		predOp = currOp;
 		curr = next;
-		currOp = reinterpret_cast<Node*>(curr)->op;
+		currOp = curr->op;
 		if (GETFLAG(currOp) != NONE) {
 			help(pred, predOp, curr, currOp);
 			goto retry;
 		}
-		currKey = reinterpret_cast<Node*>(curr)->key;
+		currKey = curr->key;
 		if (k < currKey) {
 			result = NOTFOUND_L;
-			next = reinterpret_cast<Node*>(curr)->left;
+			next = curr->left;
 		}
 		else if (k > currKey) {	
 			result = NOTFOUND_R;
-			next   = reinterpret_cast<Node*>(curr)->right;
+			next   = curr->right;
 			lastRight = curr;
 			lastRightOp = currOp;
 		}
@@ -133,72 +134,71 @@ int NonBlockingBST :: find(int k, long& pred, long& predOp,
 			break;
 		}
 	}
-	if ((result != FOUND) && (lastRightOp != reinterpret_cast<Node*>(lastRight)->op))
+	if ((result != FOUND) && (lastRightOp != lastRight->op))
 		goto retry;
-	if (reinterpret_cast<Node*>(curr)->op != currOp) goto retry;
+	if (curr->op != currOp) goto retry;
 	return result;
 }	
 
 bool NonBlockingBST :: add (int k) 
 {
-	long pred, curr, newNode;
-	long predOp, currOp, casOp;
+	Node *pred, *curr, *newNode;
+	Operation *predOp, *currOp, *casOp;
 	int result;
 	while(true) {
-		result = find(k, pred, predOp, curr, currOp, reinterpret_cast<long>(&root));
+		result = find(k, pred, predOp, curr, currOp, &root);
 		if (result == FOUND) return false;
-		newNode = reinterpret_cast<long>(new Node(k));
+		newNode = new Node(k);
 		bool isLeft = (result == NOTFOUND_L);
-		long old = isLeft ? reinterpret_cast<Node*>(curr)->left : reinterpret_cast<Node*>(curr)->right;
-		casOp = reinterpret_cast<long>(new ChildCASOp(isLeft, old, newNode));
-		if (reinterpret_cast<Node*>(curr)->op.compare_exchange_strong(currOp, FLAG(casOp, CHILDCAS))) {
+		Node* old = isLeft ? curr->left : curr->right;
+		casOp = new ChildCASOp(isLeft, old, newNode);
+		if (curr->op.compare_exchange_strong(currOp, FLAG(casOp, CHILDCAS))) {
 			helpChildCAS(casOp, curr);
 			return true;
 		}
 	}
 }
 
-void NonBlockingBST :: helpChildCAS(long op, long dest) {
-	Node* dest_p     = reinterpret_cast<Node*>(dest);
+void NonBlockingBST :: helpChildCAS(Operation* op, Node* dest) {
 	ChildCASOp *op_p = reinterpret_cast<ChildCASOp*>(op);
 	
-	(op_p->isLeft?dest_p->left:dest_p->right).compare_exchange_strong(op_p->expected, op_p->update);
-	long tmp = FLAG(op, CHILDCAS);
-	dest_p->op.compare_exchange_strong(tmp, FLAG(op, NONE));
+	(op_p->isLeft?dest->left:dest->right).compare_exchange_strong(op_p->expected, op_p->update);
+	Operation* tmp = FLAG(op_p, CHILDCAS);
+	dest->op.compare_exchange_strong(tmp, FLAG(op_p, NONE));
 }
 
 bool NonBlockingBST :: remove (int k)
 {
-	long pred, curr, replace;
-	long predOp, currOp, replaceOp, relocOp;
+	Node *pred, *curr, *replace;
+	Operation *predOp, *currOp, *replaceOp, *relocOp;
 	while (true) {
-		if (find(k,pred,predOp,curr,currOp,reinterpret_cast<long>(&root))!=FOUND) return false;
-		Node* curr_p = reinterpret_cast<Node*>(curr);
-		if (ISNULL(curr_p->right) || ISNULL(curr_p->left)) {
+		if (find(k,pred,predOp,curr,currOp,&root)!=FOUND) return false;
+		if (ISNULL(curr->right.load()) || ISNULL(curr->left.load())) {
 			// Node has < 2 children
-			if (curr_p->op.compare_exchange_strong(currOp, FLAG(currOp, MARK))) {
+			if (curr->op.compare_exchange_strong(currOp, FLAG(currOp, MARK))) {
 				helpMarked(pred, predOp, curr);
 				return true;
 			}
 		}
 		else {
 			// Node has 2 children
-			if (find(k, pred, predOp, replace, replaceOp, curr)==ABORT || curr_p->op!=currOp) continue;
-			relocOp = reinterpret_cast<long>(new RelocateOp(curr, currOp, k, reinterpret_cast<Node*>(replace)->key));
-			if (reinterpret_cast<Node*>(replace)->op.compare_exchange_strong(replaceOp,FLAG(relocOp, RELOCATE))) {
+			if (find(k, pred, predOp, replace, replaceOp, curr)==ABORT || curr->op!=currOp) continue;
+			relocOp = new RelocateOp(curr, currOp, k, replace->key);
+			if (replace->op.compare_exchange_strong(replaceOp,FLAG(relocOp, RELOCATE))) {
 				if (helpRelocate(relocOp, pred, predOp, replace)) return true;
 			}
 		}
 	}
 }
 
-bool NonBlockingBST ::  helpRelocate(long op, long pred, long predOp, long curr)
+bool NonBlockingBST ::  helpRelocate(Operation* op, Node* pred, Operation* predOp, Node* curr)
 {
 	RelocateOp* op_p = reinterpret_cast<RelocateOp*>(op);
-	Node* op_dest = reinterpret_cast<Node*>(op_p->dest);
 	int seenState = op_p->state;
 	if (seenState == ONGOING) {
-		long seenOp = __sync_val_compare_and_swap(reinterpret_cast<long*>(&op_dest->op), op_p->destOp, FLAG(op, RELOCATE));
+		Operation* seenOp = reinterpret_cast<Operation*>(__sync_val_compare_and_swap(reinterpret_cast<long*>(&op_p->dest->op),
+				                                  reinterpret_cast<long>(op_p->destOp), 
+								  reinterpret_cast<long>(FLAG(op, RELOCATE))));
 		if ((seenOp==op_p->destOp) || (seenOp==FLAG(op, RELOCATE))) {
 			int exp_state = ONGOING;
 			op_p->state.compare_exchange_strong(exp_state, SUCCESSFUL);
@@ -209,14 +209,14 @@ bool NonBlockingBST ::  helpRelocate(long op, long pred, long predOp, long curr)
 		}
 	}
 	if (seenState == SUCCESSFUL) {
-		op_dest->key.compare_exchange_strong(op_p->removeKey, op_p->replaceKey);
-		long tmp = FLAG(op, RELOCATE);
-		op_dest->op.compare_exchange_strong(tmp, FLAG(op, NONE));
+		op_p->dest->key.compare_exchange_strong(op_p->removeKey, op_p->replaceKey);
+		Operation* tmp = FLAG(op, RELOCATE);
+		op_p->dest->op.compare_exchange_strong(tmp, FLAG(op, NONE));
 	}
 	bool result = (seenState == SUCCESSFUL);
 	if (op_p->dest == curr) return result;
-	long tmp = FLAG(op, RELOCATE);
-	reinterpret_cast<Node*>(curr)->op.compare_exchange_strong(tmp, FLAG(op, result?MARK:NONE));
+	Operation* tmp = FLAG(op, RELOCATE);
+	curr->op.compare_exchange_strong(tmp, FLAG(op, result?MARK:NONE));
 	if (result) {
 		if (op_p->dest == pred) predOp = FLAG(op, NONE);
 		helpMarked(pred, predOp, curr);
@@ -224,24 +224,22 @@ bool NonBlockingBST ::  helpRelocate(long op, long pred, long predOp, long curr)
 	return result;
 }
 
-void NonBlockingBST :: helpMarked(long pred, long predOp, long curr)
+void NonBlockingBST :: helpMarked(Node* pred, Operation* predOp, Node* curr)
 {
-	long newRef;
-	Node* curr_p = reinterpret_cast<Node*>(curr);
-	Node* pred_p = reinterpret_cast<Node*>(pred);
-	if (ISNULL(curr_p->left)) {
-		if (ISNULL(curr_p->right))
+	Node* newRef;
+	if (ISNULL(curr->left.load())) {
+		if (ISNULL(curr->right.load()))
 			newRef = SETNULL(curr);
 		else
-			newRef = curr_p->right;
+			newRef = curr->right;
 	}
-	else    newRef = curr_p->left;
-	long casOp = reinterpret_cast<long>(new ChildCASOp(curr == pred_p->left, curr, newRef));
-	if (pred_p->op.compare_exchange_strong(predOp, FLAG(casOp, CHILDCAS)))
+	else    newRef = curr->left;
+	Operation* casOp = new ChildCASOp(curr == pred->left, curr, newRef);
+	if (pred->op.compare_exchange_strong(predOp, FLAG(casOp, CHILDCAS)))
 		helpChildCAS(casOp, pred);
 }
 
-void NonBlockingBST :: help(long pred, long predOp, long curr, long currOp)
+void NonBlockingBST :: help(Node* pred, Operation* predOp, Node* curr, Operation* currOp)
 {
 	if (GETFLAG(currOp)==CHILDCAS)
 		helpChildCAS(UNFLAG(currOp), curr);
