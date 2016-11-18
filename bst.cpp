@@ -12,11 +12,11 @@
 
 #define FLAG(ptr, state) ((((ptr)>>2)<<2)|(state))   /* Set the passed flag */
 #define GETFLAG(ptr)     ((ptr) & 3)                 /* Get current status */
-#define UNFLAG(ptr)      ((ptr) &= ~0<<2)            /* Clear all the flags  */
+#define UNFLAG(ptr)      ((ptr) & ~0<<2)            /* Clear all the flags  */
 
 /* Manipulate node pointers */
 
-#define SETNULL(ptr)      ((ptr) |= 1)       /* Set the null bit */
+#define SETNULL(ptr)      ((ptr) |  1)       /* Set the null bit */
 #define ISNULL(ptr)       ((ptr) &  1)       /* Check if null */
 
 /* Possible states of a relocation operation */
@@ -198,7 +198,6 @@ bool NonBlockingBST ::  helpRelocate(long op, long pred, long predOp, long curr)
 	Node* op_dest = reinterpret_cast<Node*>(op_p->dest);
 	int seenState = op_p->state;
 	if (seenState == ONGOING) {
-//		reinterpret_cast<Node*>(op_p->dest)->op.compare_exchange_strong(op_p->destOp, FLAG(op, RELOCATE));
 		long seenOp = __sync_val_compare_and_swap(reinterpret_cast<long*>(&op_dest->op), op_p->destOp, FLAG(op, RELOCATE));
 		if ((seenOp==op_p->destOp) || (seenOp==FLAG(op, RELOCATE))) {
 			int exp_state = ONGOING;
@@ -225,16 +224,40 @@ bool NonBlockingBST ::  helpRelocate(long op, long pred, long predOp, long curr)
 	return result;
 }
 
+void NonBlockingBST :: helpMarked(long pred, long predOp, long curr)
+{
+	long newRef;
+	Node* curr_p = reinterpret_cast<Node*>(curr);
+	Node* pred_p = reinterpret_cast<Node*>(pred);
+	if (ISNULL(curr_p->left)) {
+		if (ISNULL(curr_p->right))
+			newRef = SETNULL(curr);
+		else
+			newRef = curr_p->right;
+	}
+	else    newRef = curr_p->left;
+	long casOp = reinterpret_cast<long>(new ChildCASOp(curr == pred_p->left, curr, newRef));
+	if (pred_p->op.compare_exchange_strong(predOp, FLAG(casOp, CHILDCAS)))
+		helpChildCAS(casOp, pred);
+}
+
 void NonBlockingBST :: help(long pred, long predOp, long curr, long currOp)
 {
+	if (GETFLAG(currOp)==CHILDCAS)
+		helpChildCAS(UNFLAG(currOp), curr);
+	else if (GETFLAG(currOp)==RELOCATE)
+		helpRelocate(UNFLAG(currOp), pred, predOp, curr);
+	else if (GETFLAG(currOp)==MARK)
+		helpMarked(pred, predOp, curr);
 }
 
 int main()
 {
 	NonBlockingBST B;
 	while(1) {
-		int ch, val;cin>>ch>>val;
-		cout << "1:I, 2:S, 3:D, 4:E\n";
+		int ch, val;
+		cout << "1:I, 2:S, 3:D, 4:E\n";cin>>ch>>val;
+		cout << "Status: ";
 		switch(ch) {
 			case 1:
 				cout << B.add(val);
@@ -243,6 +266,8 @@ int main()
 				cout << B.contains(val);
 				break;
 			case 3:
+				cout << B.remove(val);
+				break;
 			case 4:
 			default:
 				return 0;
