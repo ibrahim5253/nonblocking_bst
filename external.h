@@ -19,100 +19,108 @@ typedef atomic<long> Update;
 
 class Info
 {
-public:
-   Info() {}
+   public:
+      Info() {}
 };
 
 class Node
 {
-public:
-   int key;
-   bool isLeaf;
-   Update update;
-   Node *left, *right;
+   public:
+      int key;
+      bool isLeaf;
+      Update update;
+      Node *left, *right;
 
-   Node(){
-      this->update.store(CLEAN);
-   }
+      Node(){
+         this->update.store(CLEAN);
+      }
 
-   Node(int k,bool isLeaf) {
-      this->isLeaf = isLeaf;
-      this->key = k;
-   }
+      Node(int k,bool isLeaf) {
+         this->isLeaf = isLeaf;
+         this->key = k;
+      }
 };
 
 class IInfo : public Info
 {
-public:
-   Node *p, *newInternal;
-   Node *l;
+   public:
+      Node *p, *newInternal;
+      Node *l;
 
-   IInfo() {}
+      IInfo() {}
 
-   IInfo(Node *p, Node *newInternal, Node *l) {
-      this->p = p;
-      this->newInternal = newInternal;
-      this->l = l;
-   }
+      IInfo(Node *p, Node *newInternal, Node *l) {
+         this->p = p;
+         this->newInternal = newInternal;
+         this->l = l;
+      }
 };
 
 class DInfo : public Info
 {
-public:
-   Node *gp, *p;
-   Node *l;
-   Update pupdate;
+   public:
+      Node *gp, *p;
+      Node *l;
+      Update pupdate;
 
-   DInfo() {}
+      DInfo() {}
 
-   DInfo(DInfo &c) {
-      gp = c.gp; p = c.p; l = c.l;
-      pupdate.store(c.pupdate);
-   }
+      DInfo(DInfo &c) {
+         gp = c.gp; p = c.p; l = c.l;
+         pupdate.store(c.pupdate);
+      }
 };
 
 // return value from Search operation
 class SearchRes
 {
-public:
-   Node *gp, *p;
-   Node *l;
-   Update gpupdate, pupdate;
+   public:
+      Node *gp, *p;
+      Node *l;
+      Update gpupdate, pupdate;
 
-   SearchRes() {}
+      SearchRes() {}
 
-   SearchRes(SearchRes &c) {
-      gp = c.gp; p = c.p; l = c.l;
-      gpupdate.store(c.gpupdate);
-      pupdate.store(c.pupdate);
-   }
+      SearchRes(SearchRes &c) {
+         gp = c.gp; p = c.p; l = c.l;
+         gpupdate.store(c.gpupdate);
+         pupdate.store(c.pupdate);
+      }
 
-   void operator =(const SearchRes &c) {
-      gp = c.gp; p = c.p; l = c.l;
-      gpupdate.store(c.gpupdate);
-      pupdate.store(c.pupdate);
-   }
+      void operator =(const SearchRes &c) {
+         gp = c.gp; p = c.p; l = c.l;
+         gpupdate.store(c.gpupdate);
+         pupdate.store(c.pupdate);
+      }
 };
 
-Node *Root = new Node(INF2,false);
-
-void init_root(Node *Root)
+class ConcurrentExternalBST
 {
-   Root->update.store(CLEAN);
-   Root->left = new Node(INF1, true);
-   Root->right = new Node(INF2, true);
-}
+   public:
+      Node *Root;
 
-/************************************************
- *             Tree Operations
- ***********************************************/
-void HelpInsert(IInfo *op);
-void Help(Update &u);
-void HelpMarked(DInfo *op);
-bool HelpDelete(DInfo *op);
-void CAS_Child(Node *parent, Node *old, Node *newInternal);
+      ConcurrentExternalBST() {
+         Root = new Node(INF2,false);
+         Root->update.store(CLEAN);
+         Root->left = new Node(INF1, true);
+         Root->right = new Node(INF2, true);
+      }
 
-SearchRes Search(int k)
+      /************************************************
+       *             Tree Operations
+       ***********************************************/
+      SearchRes Search(int k);
+      Node *Find(int k);
+      bool Insert(int k);
+      bool Delete(int k);
+      void HelpInsert(IInfo *op);
+      void Help(Update &u);
+      void HelpMarked(DInfo *op);
+      bool HelpDelete(DInfo *op);
+      void CAS_Child(Node *parent, Node *old, Node *newInternal);
+};
+
+SearchRes ConcurrentExternalBST::Search(int k)
 {
    SearchRes ret;
    Node *gp, *p;
@@ -136,7 +144,7 @@ SearchRes Search(int k)
    return ret;
 }
 
-Node *Find(int k)
+Node *ConcurrentExternalBST::Find(int k)
 {
    Node *l = Search(k).l;
    if(l->key == k)
@@ -145,7 +153,7 @@ Node *Find(int k)
       return NULL;
 }
 
-bool Insert(int k)
+bool ConcurrentExternalBST::Insert(int k)
 {
    Node *p, *newInternal;
    Node *l, *newSibling;
@@ -187,13 +195,13 @@ bool Insert(int k)
    }
 }
 
-void HelpInsert(IInfo *op)
+void ConcurrentExternalBST::HelpInsert(IInfo *op)
 {
    CAS_Child(op->p,op->l,op->newInternal);
    __sync_bool_compare_and_swap(reinterpret_cast<long*>(&(op->p->update)),UPDATE(IFLAG,op),UPDATE(CLEAN,op));
 }
 
-bool Delete(int k)
+bool ConcurrentExternalBST::Delete(int k)
 {
    Node *gp, *p;
    Node *l;
@@ -231,7 +239,7 @@ bool Delete(int k)
    }
 }
 
-bool HelpDelete(DInfo *op)
+bool ConcurrentExternalBST::HelpDelete(DInfo *op)
 {
    Update result;
 
@@ -247,7 +255,7 @@ bool HelpDelete(DInfo *op)
    }
 }
 
-void HelpMarked(DInfo *op)
+void ConcurrentExternalBST::HelpMarked(DInfo *op)
 {
    Node *other;
 
@@ -260,7 +268,7 @@ void HelpMarked(DInfo *op)
    __sync_bool_compare_and_swap(reinterpret_cast<long*>(&(op->gp->update)),UPDATE(DFLAG,op),UPDATE(CLEAN,op));
 }
 
-void Help(Update &u)
+void ConcurrentExternalBST::Help(Update &u)
 {
    if (STATE(u) == IFLAG) {
       HelpInsert(IINFO(u));
@@ -273,7 +281,7 @@ void Help(Update &u)
    }
 }
 
-void CAS_Child(Node *parent, Node *old, Node *newInternal)
+void ConcurrentExternalBST::CAS_Child(Node *parent, Node *old, Node *newInternal)
 {
    if (newInternal->key < parent->key)
       __sync_bool_compare_and_swap(reinterpret_cast<long*>(&(parent->left)),reinterpret_cast<long>(old),reinterpret_cast<long>(newInternal));
@@ -281,13 +289,13 @@ void CAS_Child(Node *parent, Node *old, Node *newInternal)
       __sync_bool_compare_and_swap(reinterpret_cast<long*>(&(parent->right)),reinterpret_cast<long>(old),reinterpret_cast<long>(newInternal));
 }
 
+/*
 int main()
 {
-   init_root(Root);
-   Insert(10);
-   Insert(20);
-   Delete(20);
-   if(Find(20))
-      cout << "fu\n";
+   ConcurrentExternalBST T;
+   T.Insert(10);
+   if (T.Find(10))
+      cout << "Yay\n";
    return 0;
 }
+*/
